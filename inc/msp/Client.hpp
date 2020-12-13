@@ -266,6 +266,16 @@ protected:
      */
     uint8_t extractChar();
 
+
+    /**
+     * @brief Decode 16bit length field for jumbo frames; implemented as
+     * method to allow const initialization
+     * @param size_buff vector[2] containing two chars representing
+     * jumbo-frame size
+     * @return jumbo frame size as uint16_t
+     */
+    uint16_t getJumboPayloadLength(std::vector<uint8_t> size_buff) const;
+
     /**
      * @brief messageReady Method used by ASIO library to determine if a
      * full message is present in receiving buffer. It must match the function
@@ -304,10 +314,12 @@ protected:
     /**
      * @brief crcV1 Computes a checksum for MSPv1 messages
      * @param id uint8_t MSP ID
-     * @param data Payload which is also part of the checksum
+     * @param data Payload which is also part of the checksum; including
+     * jumbo-frame size-field
+     * @param size Size of the actual payload; excluding jumbo frame size field
      * @return uint8_t checksum
      */
-    uint8_t crcV1(const uint8_t id, const ByteVector& data) const;
+    uint8_t crcV1(const uint8_t id, const ByteVector& data, uint16_t size) const;
 
     /**
      * @brief packMessageV2 Packs data ID and data payload into a MSPv2

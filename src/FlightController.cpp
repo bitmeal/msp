@@ -56,7 +56,7 @@ bool FlightController::connect(const std::string &device, const size_t baudrate,
     client_.sendMessage(ident, timeout);
     if(print_info) std::cout << ident;
     capabilities_ = ident.capabilities;
-
+   
     // get boxes
     initBoxes();
 

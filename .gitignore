@@ -1,6 +1,13 @@
 # Qt Creator project file
 CMakeLists.txt.user
 
+# VS Code data
+.vscode/
+*.vscode
+
+# build directories
+*build*/
+
 # Compiled Object files
 *.slo
 *.lo

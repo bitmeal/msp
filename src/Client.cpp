@@ -225,18 +225,20 @@ bool Client::sendData(const msp::ID id, const ByteVector& data) {
 ByteVector Client::packMessageV1(const msp::ID id,
                                  const ByteVector& data) const {
     ByteVector msg;
-    msg.push_back('$');                               // preamble1
-    msg.push_back('M');                               // preamble2
-    msg.push_back('<');                               // direction
-    msg.push_back(uint8_t(data.size()));              // data size
-    msg.push_back(uint8_t(id));                       // message_id
-    msg.insert(msg.end(), data.begin(), data.end());  // data
-    msg.push_back(crcV1(uint8_t(id), data));          // crc
+    msg.push_back('$');                                     // preamble1
+    msg.push_back('M');                                     // preamble2
+    msg.push_back('<');                                     // direction
+    msg.push_back(uint8_t(data.size()));                    // data size
+    msg.push_back(uint8_t(id));                             // message_id
+    msg.insert(msg.end(), data.begin(), data.end());        // data
+    msg.push_back(crcV1(uint8_t(id), data, data.size()));   // crc
     return msg;
 }
 
-uint8_t Client::crcV1(const uint8_t id, const ByteVector& data) const {
-    uint8_t crc = uint8_t(data.size()) ^ id;
+uint8_t Client::crcV1(const uint8_t id, const ByteVector& data, uint16_t size) const {
+    // restore uint8_t size field if jumbo
+    uint8_t crc = (size >= 255 ? 255 : uint8_t(size)) ^ id;
+    // jumbo size field is part of crc'd payload data
     for(const uint8_t d : data) {
         crc = crc ^ d;
     }
@@ -352,6 +354,15 @@ void Client::processOneMessage(const asio::error_code& ec,
         std::cout << "processOneMessage finished" << std::endl;
 }
 
+uint16_t Client::getJumboPayloadLength(std::vector<uint8_t> size_buff) const {
+    uint16_t size = 0;
+
+    ByteVector jumbo_size_raw = ByteVector(size_buff.begin(), size_buff.end());
+    jumbo_size_raw.unpack<uint16_t>(size);
+
+    return size;
+}
+
 std::pair<iterator, bool> Client::messageReady(iterator begin,
                                                iterator end) const {
     iterator i             = begin;
@@ -363,12 +374,20 @@ std::pair<iterator, bool> Client::messageReady(iterator begin,
         // not even enough data for a header
         if(available < 6) return std::make_pair(begin, false);
 
-        const uint8_t payload_size = uint8_t(*(i + 3));
+        // payload length; non-jumbo
+        uint8_t len_primer = uint8_t(*(i + 3));
+
+        // is jumbo, but not enough data for: header, payload, crc, jumbo size
+        if(len_primer == 255 && available < 5 + 255 + 1 + 2) return std::make_pair(begin, false);
+        // payload length; if is jumbo
+        const uint16_t payload_size = len_primer == 255 ? getJumboPayloadLength({uint8_t(*(i + 5)), uint8_t(*(i + 6))}) : len_primer;
+        const bool jumbo = payload_size >= 255;
+
         // incomplete xfer
-        if(available < size_t(5 + payload_size + 1))
+        if(available < size_t(5 + payload_size + 1 + 2*jumbo))
             return std::make_pair(begin, false);
 
-        std::advance(i, 5 + payload_size + 1);
+        std::advance(i, 5 + payload_size + 1 + 2*jumbo);
     }
     else if(*i == '$' && *(i + 1) == 'X') {
         // not even enough data for a header
@@ -402,12 +421,16 @@ ReceivedMessage Client::processOneMessageV1() {
     const uint8_t dir = extractChar();
     const bool ok_id  = (dir != '!');
 
-    // payload length
-    const uint8_t len = extractChar();
-
+    // payload length; non-jumbo
+    uint8_t len_primer = extractChar();
+    
     // message ID
     uint8_t id = extractChar();
     ret.id     = msp::ID(id);
+
+    // payload length; if is jumbo
+    const uint16_t len = len_primer == 255 ? getJumboPayloadLength({extractChar(), extractChar()}) : len_primer;
+
 
     if(log_level_ >= WARNING && !ok_id) {
         std::cerr << "Message v1 with ID " << size_t(ret.id)
@@ -420,8 +443,13 @@ ReceivedMessage Client::processOneMessageV1() {
     }
 
     // CRC
+    ByteVector crc_payload = ByteVector(0);
+    if(len >= 255)
+        crc_payload.pack<uint16_t>(len);
+    crc_payload.insert(crc_payload.end(), ret.payload.begin(), ret.payload.end());
+
     const uint8_t rcv_crc = extractChar();
-    const uint8_t exp_crc = crcV1(id, ret.payload);
+    const uint8_t exp_crc = crcV1(id, crc_payload, len);
     const bool ok_crc     = (rcv_crc == exp_crc);
 
     if(log_level_ >= WARNING && !ok_crc) {
